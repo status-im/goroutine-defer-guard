@@ -1,23 +1,19 @@
 package analyzer
 
 import (
-	"context"
 	"fmt"
 	"go/ast"
-	"os"
+	"go/token"
+	"go/types"
+	"strings"
 
 	"go.uber.org/zap"
-
-	goparser "go/parser"
-	gotoken "go/token"
-	"strings"
 
 	"github.com/pkg/errors"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 
-	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/gopls"
 	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/utils"
 )
 
@@ -25,25 +21,19 @@ const Pattern = "LogOnPanic"
 
 type Analyzer struct {
 	logger *zap.Logger
-	lsp    LSP
 	cfg    *Config
 }
 
-type LSP interface {
-	Definition(context.Context, string, int, int) (string, int, error)
-}
-
-func New(ctx context.Context, logger *zap.Logger) (*analysis.Analyzer, error) {
+func New(logger *zap.Logger) (*analysis.Analyzer, error) {
 	cfg := Config{}
 	flags, err := cfg.ParseFlags()
 	if err != nil {
 		return nil, err
 	}
 
-	logger.Info("creating analyzer", zap.String("root", cfg.RootDir))
+	logger.Info("creating analyzer")
 
-	goplsClient := gopls.NewGoplsClient(ctx, logger, cfg.RootDir)
-	processor := newAnalyzer(logger, goplsClient, &cfg)
+	processor := newAnalyzer(logger, &cfg)
 
 	analyzer := &analysis.Analyzer{
 		Name:     "goroutinedeferguard",
@@ -51,22 +41,21 @@ func New(ctx context.Context, logger *zap.Logger) (*analysis.Analyzer, error) {
 		Flags:    flags,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 		Run: func(pass *analysis.Pass) (interface{}, error) {
-			return processor.Run(ctx, pass)
+			return processor.Run(pass)
 		},
 	}
 
 	return analyzer, nil
 }
 
-func newAnalyzer(logger *zap.Logger, lsp LSP, cfg *Config) *Analyzer {
+func newAnalyzer(logger *zap.Logger, cfg *Config) *Analyzer {
 	return &Analyzer{
 		logger: logger.Named("processor"),
-		lsp:    lsp,
 		cfg:    cfg.WithAbsolutePaths(),
 	}
 }
 
-func (p *Analyzer) Run(ctx context.Context, pass *analysis.Pass) (interface{}, error) {
+func (p *Analyzer) Run(pass *analysis.Pass) (interface{}, error) {
 	inspected, ok := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	if !ok {
 		return nil, errors.New("analyzer is not type *inspector.Inspector")
@@ -79,13 +68,13 @@ func (p *Analyzer) Run(ctx context.Context, pass *analysis.Pass) (interface{}, e
 
 	// Inspect go statements
 	inspected.Preorder(nodeFilter, func(n ast.Node) {
-		p.ProcessNode(ctx, pass, n)
+		p.ProcessNode(pass, n)
 	})
 
 	return nil, nil
 }
 
-func (p *Analyzer) ProcessNode(ctx context.Context, pass *analysis.Pass, n ast.Node) {
+func (p *Analyzer) ProcessNode(pass *analysis.Pass, n ast.Node) {
 	goStmt, ok := n.(*ast.GoStmt)
 	if !ok {
 		panic("unexpected node type")
@@ -112,9 +101,8 @@ func (p *Analyzer) ProcessNode(ctx context.Context, pass *analysis.Pass, n ast.N
 			zap.Int("column", pos.Column),
 		)
 
-		defPos, err := p.checkGoroutineDefinition(ctx, pos, pass)
-		if err != nil {
-			p.logLinterError(pass, defPos, fun.Sel.Pos(), err)
+		if err := p.checkGoroutineDefinition(pass, fun); err != nil {
+			p.logLinterError(pass, goStmt.Pos(), goStmt.Pos(), err)
 		}
 
 	case *ast.Ident: // function call
@@ -125,9 +113,8 @@ func (p *Analyzer) ProcessNode(ctx context.Context, pass *analysis.Pass, n ast.N
 			zap.Int("column", pos.Column),
 		)
 
-		defPos, err := p.checkGoroutineDefinition(ctx, pos, pass)
-		if err != nil {
-			p.logLinterError(pass, defPos, fun.Pos(), err)
+		if err := p.checkGoroutineDefinition(pass, fun); err != nil {
+			p.logLinterError(pass, goStmt.Pos(), goStmt.Pos(), err)
 		}
 
 	default:
@@ -135,23 +122,6 @@ func (p *Analyzer) ProcessNode(ctx context.Context, pass *analysis.Pass, n ast.N
 			zap.String("type", fmt.Sprintf("%T", fun)),
 		)
 	}
-}
-
-func (p *Analyzer) parseFile(path string, pass *analysis.Pass) (*ast.File, error) {
-	logger := p.logger.With(zap.String("path", path))
-
-	src, err := os.ReadFile(path)
-	if err != nil {
-		logger.Error("failed to open file", zap.Error(err))
-	}
-
-	file, err := goparser.ParseFile(pass.Fset, path, src, 0)
-	if err != nil {
-		logger.Error("failed to parse file", zap.Error(err))
-		return nil, err
-	}
-
-	return file, nil
 }
 
 func (p *Analyzer) checkGoroutine(body *ast.BlockStmt) error {
@@ -182,45 +152,70 @@ func (p *Analyzer) checkGoroutine(body *ast.BlockStmt) error {
 	return nil
 }
 
-func (p *Analyzer) getFunctionBody(node ast.Node, lineNumber int, pass *analysis.Pass) (body *ast.BlockStmt, pos gotoken.Pos) {
-	ast.Inspect(node, func(n ast.Node) bool {
-		// Check if the node is a function declaration
-		funcDecl, ok := n.(*ast.FuncDecl)
-		if !ok {
-			return true
+func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr) error {
+	var funcName string
+	var receiverType string
+
+	// Extract function name and receiver type if it's a method
+	switch e := fun.(type) {
+	case *ast.Ident:
+		funcName = e.Name
+	case *ast.SelectorExpr:
+		funcName = e.Sel.Name
+		// Try to get the receiver type from the selector expression
+		if ident, ok := e.X.(*ast.Ident); ok {
+			if obj := pass.TypesInfo.ObjectOf(ident); obj != nil {
+				if varObj, ok := obj.(*types.Var); ok {
+					receiverType = varObj.Type().String()
+				}
+			}
 		}
-
-		if pass.Fset.Position(n.Pos()).Line != lineNumber {
-			return true
-		}
-
-		body = funcDecl.Body
-		pos = n.Pos()
-		return false
-	})
-
-	return body, pos
-
-}
-
-func (p *Analyzer) checkGoroutineDefinition(ctx context.Context, pos gotoken.Position, pass *analysis.Pass) (gotoken.Pos, error) {
-	defFilePath, defLineNumber, err := p.lsp.Definition(ctx, pos.Filename, pos.Line, pos.Column)
-	if err != nil {
-		p.logger.Error("failed to find function definition", zap.Error(err))
-		return 0, err
+	default:
+		return errors.New("unsupported function expression type")
 	}
 
-	file, err := p.parseFile(defFilePath, pass)
-	if err != nil {
-		p.logger.Error("failed to parse file", zap.Error(err))
-		return 0, err
+	// Find the function declaration using AST traversal
+	for _, file := range pass.Files {
+		var body *ast.BlockStmt
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncDecl:
+				// Check if this is the function we're looking for
+				if node.Name.Name != funcName {
+					break
+				}
+
+				// If we're looking for a method, check the receiver
+				if receiverType != "" && node.Recv != nil && len(node.Recv.List) > 0 {
+					// For methods, we need to match the receiver type
+					for _, field := range node.Recv.List {
+						receiverTypeFromDecl := types.ExprString(field.Type)
+						// Handle pointer receivers and named types
+						if strings.Contains(receiverType, receiverTypeFromDecl) ||
+							strings.Contains(receiverTypeFromDecl, receiverType) {
+							body = node.Body
+							return false
+						}
+					}
+				} else if receiverType == "" && node.Recv == nil {
+					// For regular functions, no receiver should be present
+					body = node.Body
+					return false
+				}
+			}
+			return true
+		})
+
+		if body != nil {
+			return p.checkGoroutine(body)
+		}
 	}
 
-	body, defPosition := p.getFunctionBody(file, defLineNumber, pass)
-	return defPosition, p.checkGoroutine(body)
+	return errors.New("could not find function body")
 }
 
-func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos gotoken.Pos, callPos gotoken.Pos, err error) {
+func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos token.Pos, callPos token.Pos, err error) {
 	errPosition := pass.Fset.Position(errPos)
 	callPosition := pass.Fset.Position(callPos)
 
