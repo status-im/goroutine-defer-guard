@@ -24,9 +24,6 @@ go install github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard@
 # Run on current directory
 goroutine-defer-guard ./...
 
-# Specify root directory for gopls
-goroutine-defer-guard -root=/path/to/project ./...
-
 # Skip certain directories
 goroutine-defer-guard -skip=./vendor ./...
 ```
@@ -68,13 +65,12 @@ go worker()
 The linter uses:
 
 1. **AST analysis** to find `go` statements (goroutines)
-2. **gopls language server** to resolve function/method definitions
+2. **Go type information** to resolve function/method definitions  
 3. **Static analysis** to verify the first statement is `defer common.LogOnPanic()`
 
 ## Requirements
 
 - Go 1.21+
-- `gopls` (Go language server) must be installed and available in PATH
 
 ## License
 

@@ -13,11 +13,11 @@ test:
 
 # Run the linter on this project
 lint:
-	go run ./cmd/goroutine-defer-guard -root="$(shell pwd)" ./...
+	go run ./cmd/goroutine-defer-guard ./...
 
 # Run the linter with verbose output
 lint-verbose:
-	go run ./cmd/goroutine-defer-guard -root="$(shell pwd)" -v ./...
+	go run ./cmd/goroutine-defer-guard -v ./...
 
 # Clean build artifacts
 clean:

@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"os"
-	"time"
 
 	"go.uber.org/zap"
 	"golang.org/x/tools/go/analysis/singlechecker"
@@ -13,19 +11,14 @@ import (
 )
 
 /*
-	Run with `-root=<directory>` to specify the root directory to run gopls. Defaults to the current working directory.
-	Set `-skip=<directory>` to skip errors in certain directories. If relative, it is relative to the root directory.
-
-	If provided, `-root` and `-skip` arguments MUST go first, before any other args.
+	Set `-skip=<directory>` to skip errors in certain directories.
+	If relative, it is relative to the current working directory.
 */
 
 func main() {
 	logger := utils.BuildLogger(zap.ErrorLevel)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	a, err := analyzer.New(ctx, logger)
+	a, err := analyzer.New(logger)
 	if err != nil {
 		logger.Error("failed to create analyzer", zap.Error(err))
 		os.Exit(1)

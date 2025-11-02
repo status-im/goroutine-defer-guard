@@ -1,9 +1,7 @@
 package analyzer
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -18,10 +16,7 @@ func TestMethods(t *testing.T) {
 
 	logger := utils.BuildLogger(zap.DebugLevel)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-	defer cancel()
-
-	a, err := New(ctx, logger)
+	a, err := New(logger)
 	require.NoError(t, err)
 
 	analysistest.Run(t, analysistest.TestData(), a, "functions")
