@@ -58,3 +58,46 @@ func testBadMethod() {
 	e := Example{}
 	go e.badMethod() // want "missing defer call to LogOnPanic"
 }
+
+type NestedExample struct {
+	example Example
+}
+
+func testNestedGoodMethod() {
+	e := NestedExample{
+		example: Example{},
+	}
+	go e.example.goodMethod()
+}
+
+func testNestedBadMethod() {
+	e := NestedExample{
+		example: Example{},
+	}
+	go e.example.badMethod() // want "missing defer call to LogOnPanic"
+}
+
+// Interface-based method call tests
+type Runner interface {
+	Run()
+}
+
+type GoodImpl struct{}
+
+func (GoodImpl) Run() {
+	defer Common.LogOnPanic()
+	fmt.Println("good impl")
+}
+
+type BadImpl struct{}
+
+func (BadImpl) Run() {
+	// missing defer on purpose
+	fmt.Println("bad impl")
+}
+
+func testInterfaceCalls(i Runner) {
+	// Calling via interface should check all implementations in package.
+	// Since BadImpl.Run lacks the defer, the linter should report here.
+	go i.Run() // want "missing defer call to LogOnPanic"
+}
