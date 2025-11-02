@@ -1,20 +1,20 @@
 package analyzer
 
 import (
-    "fmt"
-    "go/ast"
-    "go/token"
-    "go/types"
-    "strings"
-    "sync"
+	"fmt"
+	"go/ast"
+	"go/token"
+	"go/types"
+	"strings"
+	"sync"
 
-    "go.uber.org/zap"
+	"go.uber.org/zap"
 
-    "github.com/pkg/errors"
-    "golang.org/x/tools/go/analysis"
-    "golang.org/x/tools/go/analysis/passes/inspect"
-    "golang.org/x/tools/go/ast/inspector"
-    "golang.org/x/tools/go/packages"
+	"github.com/pkg/errors"
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/go/packages"
 
 	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/utils"
 )
@@ -196,58 +196,58 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 		}
 		// All assignments are valid
 		return nil
-    case *ast.SelectorExpr:
-        funcName = e.Sel.Name
-        // Determine the static type of the receiver expression directly
-        // This works for identifiers, field selectors, and parenthesized forms.
-        if t := pass.TypesInfo.TypeOf(e.X); t != nil {
-            receiverType = t
-        } else if ident, ok := e.X.(*ast.Ident); ok {
-            // Fallback to object-based lookup for identifiers
-            if obj := pass.TypesInfo.ObjectOf(ident); obj != nil {
-                if varObj, ok := obj.(*types.Var); ok {
-                    receiverType = varObj.Type()
-                }
-            }
-        }
+	case *ast.SelectorExpr:
+		funcName = e.Sel.Name
+		// Determine the static type of the receiver expression directly
+		// This works for identifiers, field selectors, and parenthesized forms.
+		if t := pass.TypesInfo.TypeOf(e.X); t != nil {
+			receiverType = t
+		} else if ident, ok := e.X.(*ast.Ident); ok {
+			// Fallback to object-based lookup for identifiers
+			if obj := pass.TypesInfo.ObjectOf(ident); obj != nil {
+				if varObj, ok := obj.(*types.Var); ok {
+					receiverType = varObj.Type()
+				}
+			}
+		}
 
-        // If the receiver is an interface, verify all concrete implementations
-        if receiverType != nil {
-            if _, isInterface := receiverType.Underlying().(*types.Interface); isInterface {
-                if err := p.checkInterfaceMethodCall(pass, funcName, receiverType, callPos); err != nil {
-                    p.logger.Warn("cannot verify interface method call",
-                        zap.String("method", funcName),
-                        zap.String("interface", receiverType.String()),
-                        zap.String("reason", err.Error()),
-                    )
-                    // Don't report an error for interface calls we can't verify
-                    return nil
-                }
-                return nil
-            }
-        }
+		// If the receiver is an interface, verify all concrete implementations
+		if receiverType != nil {
+			if _, isInterface := receiverType.Underlying().(*types.Interface); isInterface {
+				if err := p.checkInterfaceMethodCall(pass, funcName, receiverType, callPos); err != nil {
+					p.logger.Warn("cannot verify interface method call",
+						zap.String("method", funcName),
+						zap.String("interface", receiverType.String()),
+						zap.String("reason", err.Error()),
+					)
+					// Don't report an error for interface calls we can't verify
+					return nil
+				}
+				return nil
+			}
+		}
 
-        // Try to resolve external method or package-qualified function via type info
-        if sel := pass.TypesInfo.Selections[e]; sel != nil {
-            if fn, ok := sel.Obj().(*types.Func); ok {
-                if fn.Pkg() != nil && pass.Pkg != nil && fn.Pkg().Path() != pass.Pkg.Path() {
-                    if err := p.checkExternalFunc(pass, fn); err != nil {
-                        return err
-                    }
-                    return nil
-                }
-            }
-        } else {
-            // Not a method selection; this is likely a package-qualified function call: pkg.Func()
-            if obj, ok := pass.TypesInfo.Uses[e.Sel].(*types.Func); ok {
-                if obj.Pkg() != nil && pass.Pkg != nil && obj.Pkg().Path() != pass.Pkg.Path() {
-                    if err := p.checkExternalFunc(pass, obj); err != nil {
-                        return err
-                    }
-                    return nil
-                }
-            }
-        }
+		// Try to resolve external method or package-qualified function via type info
+		if sel := pass.TypesInfo.Selections[e]; sel != nil {
+			if fn, ok := sel.Obj().(*types.Func); ok {
+				if fn.Pkg() != nil && pass.Pkg != nil && fn.Pkg().Path() != pass.Pkg.Path() {
+					if err := p.checkExternalFunc(pass, fn); err != nil {
+						return err
+					}
+					return nil
+				}
+			}
+		} else {
+			// Not a method selection; this is likely a package-qualified function call: pkg.Func()
+			if obj, ok := pass.TypesInfo.Uses[e.Sel].(*types.Func); ok {
+				if obj.Pkg() != nil && pass.Pkg != nil && obj.Pkg().Path() != pass.Pkg.Path() {
+					if err := p.checkExternalFunc(pass, obj); err != nil {
+						return err
+					}
+					return nil
+				}
+			}
+		}
 	default:
 		return errors.New("unsupported function expression type")
 	}
@@ -455,73 +455,73 @@ func (p *Analyzer) findAllFunctionLiteralAssignments(pass *analysis.Pass, varObj
 // and check its body for the required defer statement. If the body cannot be
 // found or the package cannot be loaded, it returns nil to avoid false positives.
 func (p *Analyzer) checkExternalFunc(pass *analysis.Pass, fn *types.Func) error {
-    body, err := p.findFuncBodyInObjectPackage(fn)
-    if err != nil {
-        p.logger.Debug("cannot load external function body",
-            zap.String("function", fn.FullName()),
-            zap.String("pkg", fn.Pkg().Path()),
-            zap.String("reason", err.Error()),
-        )
-        // Avoid false positive when we cannot resolve external bodies
-        return nil
-    }
-    if body == nil {
-        return nil
-    }
-    return p.checkGoroutine(body)
+	body, err := p.findFuncBodyInObjectPackage(fn)
+	if err != nil {
+		p.logger.Debug("cannot load external function body",
+			zap.String("function", fn.FullName()),
+			zap.String("pkg", fn.Pkg().Path()),
+			zap.String("reason", err.Error()),
+		)
+		// Avoid false positive when we cannot resolve external bodies
+		return nil
+	}
+	if body == nil {
+		return nil
+	}
+	return p.checkGoroutine(body)
 }
 
 // findFuncBodyInObjectPackage loads the package where the function is defined and
 // returns the corresponding *ast.BlockStmt body if found.
 func (p *Analyzer) findFuncBodyInObjectPackage(fn *types.Func) (*ast.BlockStmt, error) {
-    if fn == nil || fn.Pkg() == nil {
-        return nil, errors.New("function has no package")
-    }
+	if fn == nil || fn.Pkg() == nil {
+		return nil, errors.New("function has no package")
+	}
 
-    pkgPath := fn.Pkg().Path()
-    cfg := &packages.Config{Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo}
-    pkgs, err := packages.Load(cfg, pkgPath)
-    if err != nil {
-        return nil, errors.Wrap(err, "packages.Load failed")
-    }
-    if packages.PrintErrors(pkgs) > 0 || len(pkgs) == 0 {
-        return nil, errors.Errorf("failed to load package %s", pkgPath)
-    }
+	pkgPath := fn.Pkg().Path()
+	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo}
+	pkgs, err := packages.Load(cfg, pkgPath)
+	if err != nil {
+		return nil, errors.Wrap(err, "packages.Load failed")
+	}
+	if packages.PrintErrors(pkgs) > 0 || len(pkgs) == 0 {
+		return nil, errors.Errorf("failed to load package %s", pkgPath)
+	}
 
-    targetName := fn.Name()
-    var targetRecv string
-    if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
-        targetRecv = types.TypeString(sig.Recv().Type(), func(p *types.Package) string { return p.Path() })
-    }
+	targetName := fn.Name()
+	var targetRecv string
+	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+		targetRecv = types.TypeString(sig.Recv().Type(), func(p *types.Package) string { return p.Path() })
+	}
 
-    for _, pkg := range pkgs {
-        ti := pkg.TypesInfo
-        for _, f := range pkg.Syntax {
-            for _, d := range f.Decls {
-                fd, ok := d.(*ast.FuncDecl)
-                if !ok || fd.Name == nil || fd.Name.Name != targetName {
-                    continue
-                }
-                if targetRecv == "" {
-                    if fd.Recv == nil {
-                        return fd.Body, nil
-                    }
-                    continue
-                }
-                if fd.Recv == nil || len(fd.Recv.List) == 0 {
-                    continue
-                }
-                recvType := ti.TypeOf(fd.Recv.List[0].Type)
-                if recvType == nil {
-                    continue
-                }
-                recvStr := types.TypeString(recvType, func(p *types.Package) string { return p.Path() })
-                if recvStr == targetRecv {
-                    return fd.Body, nil
-                }
-            }
-        }
-    }
+	for _, pkg := range pkgs {
+		ti := pkg.TypesInfo
+		for _, f := range pkg.Syntax {
+			for _, d := range f.Decls {
+				fd, ok := d.(*ast.FuncDecl)
+				if !ok || fd.Name == nil || fd.Name.Name != targetName {
+					continue
+				}
+				if targetRecv == "" {
+					if fd.Recv == nil {
+						return fd.Body, nil
+					}
+					continue
+				}
+				if fd.Recv == nil || len(fd.Recv.List) == 0 {
+					continue
+				}
+				recvType := ti.TypeOf(fd.Recv.List[0].Type)
+				if recvType == nil {
+					continue
+				}
+				recvStr := types.TypeString(recvType, func(p *types.Package) string { return p.Path() })
+				if recvStr == targetRecv {
+					return fd.Body, nil
+				}
+			}
+		}
+	}
 
-    return nil, errors.New("function body not found in loaded package")
+	return nil, errors.New("function body not found in loaded package")
 }
