@@ -25,7 +25,7 @@ func init() {
 func (c *Config) ParseFlags() (flag.FlagSet, error) {
 	flags := flag.NewFlagSet("goroutine-defer-guard", flag.ContinueOnError)
 	flags.SetOutput(io.Discard) // Otherwise errors are printed to stderr
-	flags.StringVar(&c.SkipDir, "skip", "", "skip paths with this suffix")
+	flags.StringVar(&c.SkipDir, "skip", "", "skip paths with this prefix")
 
 	// We parse the flags here to have the config before the call to `singlechecker.Main(analyzer)`
 	// For same reasons we discard the output and skip the undefined flag error.
