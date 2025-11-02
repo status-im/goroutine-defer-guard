@@ -317,8 +317,7 @@ func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos token.Pos, callPos
 }
 
 func (p *Analyzer) skip(filepath string) bool {
-	return strings.HasSuffix(filepath, "_test.go") ||
-		p.cfg.SkipDir != "" && strings.HasPrefix(filepath, p.cfg.SkipDir)
+	return p.cfg.SkipDir != "" && strings.HasPrefix(filepath, p.cfg.SkipDir)
 }
 
 // checkInterfaceMethodCall attempts to find and verify all concrete implementations
