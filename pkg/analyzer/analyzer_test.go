@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/utils"
+	"github.com/status-im/goroutine-defer-guard/pkg/utils"
 )
 
 func TestMethods(t *testing.T) {

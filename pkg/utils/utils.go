@@ -1,10 +1,9 @@
 package utils
 
 import (
-	"strconv"
-
 	"fmt"
 	"os"
+	"strconv"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

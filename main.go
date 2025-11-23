@@ -6,8 +6,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/tools/go/analysis/singlechecker"
 
-	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/analyzer"
-	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/utils"
+	"github.com/status-im/goroutine-defer-guard/pkg/analyzer"
+	"github.com/status-im/goroutine-defer-guard/pkg/utils"
 )
 
 /*

@@ -16,7 +16,7 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/status-im/goroutine-defer-guard/cmd/goroutine-defer-guard/utils"
+	"github.com/status-im/goroutine-defer-guard/pkg/utils"
 )
 
 const Pattern = "LogOnPanic"

@@ -2,10 +2,7 @@
 
 # Build the binary
 build:
-	go build -o bin/goroutine-defer-guard ./cmd/goroutine-defer-guard
-
-# Install the binary globally
-	go install ./cmd/goroutine-defer-guard
+	go build -o bin/goroutine-defer-guard main.go
 
 # Run tests
 test:
@@ -13,11 +10,11 @@ test:
 
 # Run the linter on this project
 lint:
-	go run ./cmd/goroutine-defer-guard ./...
+	go run main.go ./...
 
 # Run the linter with verbose output
 lint-verbose:
-	go run ./cmd/goroutine-defer-guard -v ./...
+	go run main.go -v ./...
 
 # Clean build artifacts
 clean:
