@@ -1,20 +1,19 @@
 package analyzer
 
 import (
-	"testing"
+    "testing"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
+    "github.com/stretchr/testify/require"
+    
+    "golang.org/x/tools/go/analysis/analysistest"
 
-	"golang.org/x/tools/go/analysis/analysistest"
-
-	"github.com/status-im/goroutine-defer-guard/pkg/utils"
+    "github.com/status-im/goroutine-defer-guard/pkg/utils"
 )
 
 func TestMethods(t *testing.T) {
 	t.Parallel()
 
-	logger := utils.BuildLogger(zap.DebugLevel)
+    logger := utils.BuildLogger()
 
 	a, err := New(logger)
 	require.NoError(t, err)

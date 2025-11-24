@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 
-	"go.uber.org/zap"
 	"golang.org/x/tools/go/analysis/singlechecker"
 
 	"github.com/status-im/goroutine-defer-guard/pkg/analyzer"
@@ -16,13 +15,14 @@ import (
 */
 
 func main() {
-	logger := utils.BuildLogger(zap.ErrorLevel)
+	logger := utils.BuildLogger()
 
 	a, err := analyzer.New(logger)
 	if err != nil {
-		logger.Error("failed to create analyzer", zap.Error(err))
+		logger.Errorf("failed to create analyzer: %v", err)
 		os.Exit(1)
 	}
 
+	// singlechecker runs the analyzer
 	singlechecker.Main(a)
 }
