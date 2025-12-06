@@ -5,6 +5,8 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"os"
+	"path"
 	"strings"
 	"sync"
 
@@ -302,47 +304,21 @@ func (p *Analyzer) skip(filepath string) bool {
 }
 
 // checkInterfaceMethodCall attempts to find and verify all concrete implementations
-// of an interface method that could be called at runtime
+// of an interface method that could be called at runtime across all packages in the project
 func (p *Analyzer) checkInterfaceMethodCall(pass *analysis.Pass, methodName string, interfaceType types.Type, callPos token.Pos) error {
 	iface, ok := interfaceType.Underlying().(*types.Interface)
 	if !ok {
 		return errors.New("not an interface type")
 	}
 
-	// Find all types in the current package that implement this interface
-	var implementations []*ast.FuncDecl
-	var implementationTypes []types.Type
-
-	for _, file := range pass.Files {
-		ast.Inspect(file, func(n ast.Node) bool {
-			funcDecl, ok := n.(*ast.FuncDecl)
-			if !ok || funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
-				return true
-			}
-
-			// Check if this is the method we're looking for
-			if funcDecl.Name.Name != methodName {
-				return true
-			}
-
-			// Get the receiver type
-			recvType := pass.TypesInfo.TypeOf(funcDecl.Recv.List[0].Type)
-			if recvType == nil {
-				return true
-			}
-
-			// Check if this receiver type implements the interface
-			if types.Implements(recvType, iface) || types.Implements(types.NewPointer(recvType), iface) {
-				implementations = append(implementations, funcDecl)
-				implementationTypes = append(implementationTypes, recvType)
-			}
-
-			return true
-		})
+	// Find all implementations across all packages in the project
+	implementations, implementationTypes, err := p.findAllInterfaceImplementations(pass, methodName, iface)
+	if err != nil {
+		return err
 	}
 
 	if len(implementations) == 0 {
-		return errors.New("no implementations found in current package")
+		return errors.New("no implementations found in project")
 	}
 
 	// Check all implementations - directly report missing defer at the call site
@@ -360,6 +336,80 @@ func (p *Analyzer) checkInterfaceMethodCall(pass *analysis.Pass, methodName stri
 	p.logger.Infof("all interface implementations verified interface=%s method=%s implementations=%d", interfaceType.String(), methodName, len(implementations))
 
 	return nil
+}
+
+// findAllInterfaceImplementations searches for all implementations of an interface method
+// across all packages in the project starting from the module root directory
+func (p *Analyzer) findAllInterfaceImplementations(pass *analysis.Pass, methodName string, iface *types.Interface) ([]*ast.FuncDecl, []types.Type, error) {
+	var implementations []*ast.FuncDecl
+	var implementationTypes []types.Type
+
+	// Find the module root by looking for go.mod
+	moduleRoot, err := p.findModuleRoot()
+	if err != nil {
+		p.logger.Warnf("could not find module root, falling back to current directory: %s", err.Error())
+		moduleRoot = "."
+	} else {
+		p.logger.Infof("found module root at: %s", moduleRoot)
+	}
+
+	// Load all packages in the project using ./... pattern from the module root
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Dir:  moduleRoot, // Set the working directory explicitly
+	}
+
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "failed to load packages")
+	}
+
+	if packages.PrintErrors(pkgs) > 0 {
+		p.logger.Warnf("some packages have errors during load, continuing with available packages")
+	}
+
+	p.logger.Infof("loaded %d packages for interface implementation search from %s", len(pkgs), moduleRoot)
+
+	// Search through all loaded packages
+	for _, pkg := range pkgs {
+		if pkg.TypesInfo == nil {
+			p.logger.Warnf("skipping package with no type info package=%s", pkg.PkgPath)
+			continue
+		}
+
+		p.logger.Infof("searching for implementations in package=%s", pkg.PkgPath)
+
+		for _, file := range pkg.Syntax {
+			ast.Inspect(file, func(n ast.Node) bool {
+				funcDecl, ok := n.(*ast.FuncDecl)
+				if !ok || funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+					return true
+				}
+
+				// Check if this is the method we're looking for
+				if funcDecl.Name.Name != methodName {
+					return true
+				}
+
+				// Get the receiver type
+				recvType := pkg.TypesInfo.TypeOf(funcDecl.Recv.List[0].Type)
+				if recvType == nil {
+					return true
+				}
+
+				// Check if this receiver type implements the interface
+				if types.Implements(recvType, iface) || types.Implements(types.NewPointer(recvType), iface) {
+					p.logger.Infof("found implementation: package=%s type=%s method=%s", pkg.PkgPath, recvType.String(), methodName)
+					implementations = append(implementations, funcDecl)
+					implementationTypes = append(implementationTypes, recvType)
+				}
+
+				return true
+			})
+		}
+	}
+
+	return implementations, implementationTypes, nil
 }
 
 // findAllFunctionLiteralAssignments finds ALL function literal assignments to a variable.
@@ -442,6 +492,31 @@ func (p *Analyzer) checkExternalFunc(pass *analysis.Pass, fn *types.Func) error 
 		return nil
 	}
 	return p.checkGoroutine(body)
+}
+
+// findModuleRoot searches for the go.mod file starting from the current directory
+// and walking up the directory tree until it finds one or reaches the filesystem root
+func (p *Analyzer) findModuleRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", errors.Wrap(err, "failed to get current directory")
+	}
+
+	for {
+		goModPath := path.Join(dir, "go.mod")
+		if _, err := os.Stat(goModPath); err == nil {
+			return dir, nil
+		}
+
+		parent := path.Dir(dir)
+		if parent == dir {
+			// Reached filesystem root
+			break
+		}
+		dir = parent
+	}
+
+	return "", errors.New("go.mod not found in current directory or any parent directory")
 }
 
 // findFuncBodyInObjectPackage loads the package where the function is defined and
