@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -27,23 +26,15 @@ type Log interface {
 
 type Analyzer struct {
 	logger              Log
-	cfg                 *Config
 	processedGoroutines sync.Map
 }
 
 func New(logger Log) (*analysis.Analyzer, error) {
-	cfg := Config{}
-	flags, err := cfg.ParseFlags()
-	if err != nil {
-		return nil, err
-	}
-
-	processor := newAnalyzer(logger, &cfg)
+	processor := newAnalyzer(logger)
 
 	analyzer := &analysis.Analyzer{
 		Name:     "goroutinedeferguard",
 		Doc:      fmt.Sprintf("reports missing defer call to %s", Pattern),
-		Flags:    flags,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 		Run: func(pass *analysis.Pass) (interface{}, error) {
 			return processor.Run(pass)
@@ -53,10 +44,9 @@ func New(logger Log) (*analysis.Analyzer, error) {
 	return analyzer, nil
 }
 
-func newAnalyzer(logger Log, cfg *Config) *Analyzer {
+func newAnalyzer(logger Log) *Analyzer {
 	return &Analyzer{
 		logger:              logger,
-		cfg:                 cfg.WithAbsolutePaths(),
 		processedGoroutines: sync.Map{},
 	}
 }
@@ -239,10 +229,6 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 	for _, file := range pass.Files {
 		var body *ast.BlockStmt
 
-		if funcName == "Listen" {
-			p.logger.Infof("looking for Listen filePath=%s", file.Name.Name)
-		}
-
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.FuncDecl:
@@ -281,12 +267,6 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 
 func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos token.Pos, callPos token.Pos, err error) {
 	errPosition := pass.Fset.Position(errPos)
-	callPosition := pass.Fset.Position(callPos)
-
-	if p.skip(errPosition.Filename) || p.skip(callPosition.Filename) {
-		return
-	}
-
 	message := fmt.Sprintf("missing %s()", Pattern)
 	p.logger.Warnf("%s uri=%s details=%s", message, utils.URI(errPosition.Filename, errPosition.Line), err.Error())
 
@@ -295,10 +275,6 @@ func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos token.Pos, callPos
 	} else {
 		pass.Reportf(callPos, "missing defer call to %s: %s", Pattern, err.Error())
 	}
-}
-
-func (p *Analyzer) skip(filepath string) bool {
-	return p.cfg.SkipDir != "" && strings.HasPrefix(filepath, p.cfg.SkipDir)
 }
 
 // checkInterfaceMethodCall attempts to find and verify all concrete implementations
