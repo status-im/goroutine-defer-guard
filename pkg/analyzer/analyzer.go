@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -18,24 +19,26 @@ import (
 	"github.com/status-im/goroutine-defer-guard/pkg/utils"
 )
 
-const Pattern = "LogOnPanic"
-
 type Analyzer struct {
 	logger              *log.Logger
 	processedGoroutines sync.Map
+	target              Target
 }
 
 func New(logger *log.Logger) *analysis.Analyzer {
-	processor := newAnalyzer(logger)
+	goroutinedeferguard := newAnalyzer(logger)
 
 	analyzer := &analysis.Analyzer{
 		Name:     "goroutinedeferguard",
-		Doc:      fmt.Sprintf("reports missing defer call to %s", Pattern),
+		Doc:      fmt.Sprintf("reports missing defer call to defined function as first actoin in goroutines"),
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 		Run: func(pass *analysis.Pass) (interface{}, error) {
-			return processor.Run(pass)
+			return goroutinedeferguard.Run(pass)
 		},
 	}
+
+	analyzer.Flags.Init(analyzer.Name, flag.ExitOnError)
+	analyzer.Flags.Var(&goroutinedeferguard.target, "target", "fully qualified panic handler identifier in the form full/pkg/path.Foo")
 
 	return analyzer
 }
@@ -47,6 +50,10 @@ func newAnalyzer(logger *log.Logger) *Analyzer {
 	return &Analyzer{
 		logger:              logger,
 		processedGoroutines: sync.Map{},
+		target: Target{
+			PackagePath: "",
+			FuncName:    defaultFuncName,
+		},
 	}
 }
 
@@ -86,7 +93,7 @@ func (p *Analyzer) ProcessNode(pass *analysis.Pass, n ast.Node) {
 	case *ast.FuncLit: // anonymous function
 		pos := pass.Fset.Position(fun.Pos())
 		p.logger.Printf("found anonymous goroutine uri=%s column=%d", utils.URI(pos.Filename, pos.Line), pos.Column)
-		if err := p.checkGoroutine(fun.Body); err != nil {
+		if err := p.checkGoroutine(fun.Body, pass.TypesInfo); err != nil {
 			p.logLinterError(pass, fun.Pos(), fun.Pos(), err)
 		}
 
@@ -111,7 +118,7 @@ func (p *Analyzer) ProcessNode(pass *analysis.Pass, n ast.Node) {
 	}
 }
 
-func (p *Analyzer) checkGoroutine(body *ast.BlockStmt) error {
+func (p *Analyzer) checkGoroutine(body *ast.BlockStmt, typeInfo *types.Info) error {
 	if body == nil {
 		p.logger.Printf("missing function body")
 		return nil
@@ -127,16 +134,76 @@ func (p *Analyzer) checkGoroutine(body *ast.BlockStmt) error {
 		return errors.New("first statement is not defer")
 	}
 
-	selectorExpr, ok := deferStatement.Call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return errors.New("first statement call is not a selector")
-	}
-
-	if selectorExpr.Sel.Name != Pattern {
-		return errors.Errorf("first statement is not %s", Pattern)
+	if err := p.matchTargetCall(deferStatement.Call.Fun, typeInfo); err != nil {
+		return errors.Wrap(err, "target mismatch")
 	}
 
 	return nil
+}
+
+func (p *Analyzer) matchTargetCall(call ast.Expr, typeInfo *types.Info) error {
+	switch expr := call.(type) {
+	case *ast.SelectorExpr:
+		return p.matchTargetSelector(expr, typeInfo)
+	case *ast.Ident:
+		return p.matchTargetIdent(expr, typeInfo)
+	default:
+		return errors.New("statement is not a selector or identifier")
+	}
+}
+
+func (p *Analyzer) matchTargetIdent(ident *ast.Ident, typeInfo *types.Info) error {
+	if typeInfo != nil {
+		if obj, ok := typeInfo.Uses[ident]; ok {
+			if fn, ok := obj.(*types.Func); ok {
+				return p.matchFuncObject(fn)
+			}
+		}
+	}
+
+	if ident.Name != p.target.FuncName {
+		return errors.Errorf("expected call '%s', got '%s'", p.target.FuncName, ident.Name)
+	}
+	if p.target.PackagePath != "" {
+		return errors.Errorf("expected package '%s', got local identifier", p.target.PackagePath)
+	}
+	return nil
+}
+
+func (p *Analyzer) matchTargetSelector(selectorExpr *ast.SelectorExpr, typeInfo *types.Info) error {
+	if typeInfo != nil {
+		if obj, ok := typeInfo.Uses[selectorExpr.Sel]; ok {
+			if fn, ok := obj.(*types.Func); ok {
+				return p.matchFuncObject(fn)
+			}
+		}
+	}
+
+	if selectorExpr.Sel.Name != p.target.FuncName {
+		return errors.Errorf("expected call '%s', got '%s'", p.target.FuncName, selectorExpr.Sel.Name)
+	}
+	if p.target.PackagePath != "" {
+		return errors.Errorf("expected package '%s', got unresolved selector", p.target.PackagePath)
+	}
+	return nil
+}
+
+func (p *Analyzer) matchFuncObject(fn *types.Func) error {
+	if fn.Name() != p.target.FuncName {
+		return errors.Errorf("expected call '%s', got '%s'", p.target.FuncName, fn.Name())
+	}
+	if p.target.PackagePath == "" {
+		return nil
+	}
+
+	pkgPath := ""
+	if fn.Pkg() != nil {
+		pkgPath = fn.Pkg().Path()
+	}
+	if pkgPath == p.target.PackagePath {
+		return nil
+	}
+	return errors.Errorf("expected package '%s', got '%s'", p.target.PackagePath, pkgPath)
 }
 
 func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, callPos token.Pos) error {
@@ -166,7 +233,7 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 
 		// Check all assignments - if any don't have the defer, report error
 		for _, funcLit := range funcLits {
-			if err := p.checkGoroutine(funcLit.Body); err != nil {
+			if err := p.checkGoroutine(funcLit.Body, pass.TypesInfo); err != nil {
 				return err
 			}
 		}
@@ -257,7 +324,7 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 		})
 
 		if body != nil {
-			return p.checkGoroutine(body)
+			return p.checkGoroutine(body, pass.TypesInfo)
 		}
 	}
 
@@ -266,14 +333,21 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 
 func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos token.Pos, callPos token.Pos, err error) {
 	errPosition := pass.Fset.Position(errPos)
-	message := fmt.Sprintf("missing %s()", Pattern)
+	message := fmt.Sprintf("missing %s()", p.targetDescription())
 	p.logger.Printf("%s uri=%s details=%s", message, utils.URI(errPosition.Filename, errPosition.Line), err.Error())
 
 	if callPos == errPos {
-		pass.Reportf(errPos, "missing defer call to %s: %s", Pattern, err.Error())
+		pass.Reportf(errPos, "missing defer call to %s: %s", p.targetDescription(), err.Error())
 	} else {
-		pass.Reportf(callPos, "missing defer call to %s: %s", Pattern, err.Error())
+		pass.Reportf(callPos, "missing defer call to %s: %s", p.targetDescription(), err.Error())
 	}
+}
+
+func (p *Analyzer) targetDescription() string {
+	if p.target.PackagePath == "" {
+		return p.target.FuncName
+	}
+	return fmt.Sprintf("%s.%s", p.target.PackagePath, p.target.FuncName)
 }
 
 // checkInterfaceMethodCall attempts to find and verify all concrete implementations
@@ -325,7 +399,7 @@ func (p *Analyzer) checkInterfaceMethodCall(pass *analysis.Pass, methodName stri
 		// no-op: keep parallel arrays consistent if needed later
 	}
 	for i, impl := range implementations {
-		if err := p.checkGoroutine(impl.Body); err != nil {
+		if err := p.checkGoroutine(impl.Body, pass.TypesInfo); err != nil {
 			// Report: error position is implementation method, call position is the goroutine call site
 			_ = implementationTypes[i] // reserved for future message enrichment
 			p.logLinterError(pass, impl.Pos(), callPos, err)
@@ -407,7 +481,7 @@ func (p *Analyzer) findAllFunctionLiteralAssignments(pass *analysis.Pass, varObj
 // and check its body for the required defer statement. If the body cannot be
 // found or the package cannot be loaded, it returns nil to avoid false positives.
 func (p *Analyzer) checkExternalFunc(pass *analysis.Pass, fn *types.Func) error {
-	body, err := p.findFuncBodyInObjectPackage(fn)
+	body, typeInfo, err := p.findFuncBodyInObjectPackage(fn)
 	if err != nil {
 		p.logger.Printf("cannot load external function body function=%s pkg=%s reason=%s", fn.FullName(), fn.Pkg().Path(), err.Error())
 		// Avoid false positive when we cannot resolve external bodies
@@ -416,24 +490,24 @@ func (p *Analyzer) checkExternalFunc(pass *analysis.Pass, fn *types.Func) error 
 	if body == nil {
 		return nil
 	}
-	return p.checkGoroutine(body)
+	return p.checkGoroutine(body, typeInfo)
 }
 
 // findFuncBodyInObjectPackage loads the package where the function is defined and
 // returns the corresponding *ast.BlockStmt body if found.
-func (p *Analyzer) findFuncBodyInObjectPackage(fn *types.Func) (*ast.BlockStmt, error) {
+func (p *Analyzer) findFuncBodyInObjectPackage(fn *types.Func) (*ast.BlockStmt, *types.Info, error) {
 	if fn == nil || fn.Pkg() == nil {
-		return nil, errors.New("function has no package")
+		return nil, nil, errors.New("function has no package")
 	}
 
 	pkgPath := fn.Pkg().Path()
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo}
 	pkgs, err := packages.Load(cfg, pkgPath)
 	if err != nil {
-		return nil, errors.Wrap(err, "packages.Load failed")
+		return nil, nil, errors.Wrap(err, "packages.Load failed")
 	}
 	if packages.PrintErrors(pkgs) > 0 || len(pkgs) == 0 {
-		return nil, errors.Errorf("failed to load package %s", pkgPath)
+		return nil, nil, errors.Errorf("failed to load package %s", pkgPath)
 	}
 
 	targetName := fn.Name()
@@ -452,7 +526,7 @@ func (p *Analyzer) findFuncBodyInObjectPackage(fn *types.Func) (*ast.BlockStmt, 
 				}
 				if targetRecv == "" {
 					if fd.Recv == nil {
-						return fd.Body, nil
+						return fd.Body, pkg.TypesInfo, nil
 					}
 					continue
 				}
@@ -465,11 +539,11 @@ func (p *Analyzer) findFuncBodyInObjectPackage(fn *types.Func) (*ast.BlockStmt, 
 				}
 				recvStr := types.TypeString(recvType, func(p *types.Package) string { return p.Path() })
 				if recvStr == targetRecv {
-					return fd.Body, nil
+					return fd.Body, pkg.TypesInfo, nil
 				}
 			}
 		}
 	}
 
-	return nil, errors.New("function body not found in loaded package")
+	return nil, nil, errors.New("function body not found in loaded package")
 }

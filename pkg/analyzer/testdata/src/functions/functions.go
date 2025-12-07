@@ -2,27 +2,23 @@ package functions
 
 import "fmt"
 
-type common struct{}
-
-func (c common) LogOnPanic() {}
-
-var Common = common{}
+func HandlePanic() {}
 
 func goodAnonymous() {
 	go func() {
-		defer Common.LogOnPanic()
+		defer HandlePanic()
 		fmt.Println("Hello, World!")
 	}()
 }
 
 func badAnonymous() {
-	go func() { // want "missing defer call to LogOnPanic"
+	go func() { // want "missing defer call to HandlePanic"
 		fmt.Println("Hello, World!")
 	}()
 }
 
 func goodFunction() {
-	defer Common.LogOnPanic()
+	defer HandlePanic()
 	fmt.Println("Hello, World!")
 }
 
@@ -35,13 +31,13 @@ func testGoodFunction() {
 }
 
 func testBadFunction() {
-	go badFunction() // want "missing defer call to LogOnPanic"
+	go badFunction() // want "missing defer call to HandlePanic"
 }
 
 type Example struct{}
 
 func (e Example) goodMethod() {
-	defer Common.LogOnPanic()
+	defer HandlePanic()
 	fmt.Println("Hello, World!")
 }
 
@@ -56,7 +52,7 @@ func testGoodMethod() {
 
 func testBadMethod() {
 	e := Example{}
-	go e.badMethod() // want "missing defer call to LogOnPanic"
+	go e.badMethod() // want "missing defer call to HandlePanic"
 }
 
 type NestedExample struct {
@@ -74,7 +70,7 @@ func testNestedBadMethod() {
 	e := NestedExample{
 		example: Example{},
 	}
-	go e.example.badMethod() // want "missing defer call to LogOnPanic"
+	go e.example.badMethod() // want "missing defer call to HandlePanic"
 }
 
 // Interface-based method call tests
@@ -85,7 +81,7 @@ type Runner interface {
 type GoodImpl struct{}
 
 func (GoodImpl) Run() {
-	defer Common.LogOnPanic()
+	defer HandlePanic()
 	fmt.Println("good impl")
 }
 
@@ -99,5 +95,5 @@ func (BadImpl) Run() {
 func testInterfaceCalls(i Runner) {
 	// Calling via interface should check all implementations in package.
 	// Since BadImpl.Run lacks the defer, the linter should report here.
-	go i.Run() // want "missing defer call to LogOnPanic"
+	go i.Run() // want "missing defer call to HandlePanic"
 }
