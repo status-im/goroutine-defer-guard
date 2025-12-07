@@ -7,7 +7,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-const defaultFuncName = "HandlePanic"
+const DefaultTarget = "HandlePanic"
 
 type Target struct {
 	PackagePath string
@@ -23,7 +23,7 @@ func (t *Target) Set(s string) error {
 	t.FuncName = ""
 
 	if s == "" {
-		return errors.New("empty target function name")
+		return errors.New("empty target")
 	}
 
 	idx := strings.LastIndex(s, ".")

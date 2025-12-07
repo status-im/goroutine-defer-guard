@@ -38,7 +38,7 @@ func New(logger *log.Logger) *analysis.Analyzer {
 	}
 
 	analyzer.Flags.Init(analyzer.Name, flag.ExitOnError)
-	analyzer.Flags.Var(&goroutinedeferguard.target, "target", "fully qualified panic handler identifier in the form full/pkg/path.Foo")
+	analyzer.Flags.Var(&goroutinedeferguard.target, "target", "fully qualified handler identifier in the form full/pkg/path.Foo")
 
 	return analyzer
 }
@@ -52,7 +52,7 @@ func newAnalyzer(logger *log.Logger) *Analyzer {
 		processedGoroutines: sync.Map{},
 		target: Target{
 			PackagePath: "",
-			FuncName:    defaultFuncName,
+			FuncName:    DefaultTarget,
 		},
 	}
 }
