@@ -5,6 +5,8 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"io"
+	"log"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -18,18 +20,12 @@ import (
 
 const Pattern = "LogOnPanic"
 
-type Log interface {
-	Errorf(format string, args ...any)
-	Warnf(format string, args ...any)
-	Infof(format string, args ...any)
-}
-
 type Analyzer struct {
-	logger              Log
+	logger              *log.Logger
 	processedGoroutines sync.Map
 }
 
-func New(logger Log) (*analysis.Analyzer, error) {
+func New(logger *log.Logger) *analysis.Analyzer {
 	processor := newAnalyzer(logger)
 
 	analyzer := &analysis.Analyzer{
@@ -41,10 +37,13 @@ func New(logger Log) (*analysis.Analyzer, error) {
 		},
 	}
 
-	return analyzer, nil
+	return analyzer
 }
 
-func newAnalyzer(logger Log) *Analyzer {
+func newAnalyzer(logger *log.Logger) *Analyzer {
+	if logger == nil {
+		logger = log.New(io.Discard, "", 0)
+	}
 	return &Analyzer{
 		logger:              logger,
 		processedGoroutines: sync.Map{},
@@ -86,14 +85,14 @@ func (p *Analyzer) ProcessNode(pass *analysis.Pass, n ast.Node) {
 	switch fun := goStmt.Call.Fun.(type) {
 	case *ast.FuncLit: // anonymous function
 		pos := pass.Fset.Position(fun.Pos())
-		p.logger.Infof("found anonymous goroutine uri=%s column=%d", utils.URI(pos.Filename, pos.Line), pos.Column)
+		p.logger.Printf("found anonymous goroutine uri=%s column=%d", utils.URI(pos.Filename, pos.Line), pos.Column)
 		if err := p.checkGoroutine(fun.Body); err != nil {
 			p.logLinterError(pass, fun.Pos(), fun.Pos(), err)
 		}
 
 	case *ast.SelectorExpr: // method call
 		pos := pass.Fset.Position(fun.Sel.Pos())
-		p.logger.Infof("found method call as goroutine methodName=%s uri=%s column=%d", fun.Sel.Name, utils.URI(pos.Filename, pos.Line), pos.Column)
+		p.logger.Printf("found method call as goroutine methodName=%s uri=%s column=%d", fun.Sel.Name, utils.URI(pos.Filename, pos.Line), pos.Column)
 
 		if err := p.checkGoroutineDefinition(pass, fun, goStmt.Pos()); err != nil {
 			p.logLinterError(pass, goStmt.Pos(), goStmt.Pos(), err)
@@ -101,20 +100,20 @@ func (p *Analyzer) ProcessNode(pass *analysis.Pass, n ast.Node) {
 
 	case *ast.Ident: // function call
 		pos := pass.Fset.Position(fun.Pos())
-		p.logger.Infof("found function call as goroutine functionName=%s uri=%s column=%d", fun.Name, utils.URI(pos.Filename, pos.Line), pos.Column)
+		p.logger.Printf("found function call as goroutine functionName=%s uri=%s column=%d", fun.Name, utils.URI(pos.Filename, pos.Line), pos.Column)
 
 		if err := p.checkGoroutineDefinition(pass, fun, goStmt.Pos()); err != nil {
 			p.logLinterError(pass, goStmt.Pos(), goStmt.Pos(), err)
 		}
 
 	default:
-		p.logger.Errorf("unexpected goroutine type type=%T", fun)
+		p.logger.Printf("unexpected goroutine type type=%T", fun)
 	}
 }
 
 func (p *Analyzer) checkGoroutine(body *ast.BlockStmt) error {
 	if body == nil {
-		p.logger.Warnf("missing function body")
+		p.logger.Printf("missing function body")
 		return nil
 	}
 
@@ -192,7 +191,7 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 		if receiverType != nil {
 			if _, isInterface := receiverType.Underlying().(*types.Interface); isInterface {
 				if err := p.checkInterfaceMethodCall(pass, funcName, receiverType, callPos); err != nil {
-					p.logger.Warnf("cannot verify interface method call method=%s interface=%s reason=%s", funcName, receiverType.String(), err.Error())
+					p.logger.Printf("cannot verify interface method call method=%s interface=%s reason=%s", funcName, receiverType.String(), err.Error())
 					// Don't report an error for interface calls we can't verify
 					return nil
 				}
@@ -268,7 +267,7 @@ func (p *Analyzer) checkGoroutineDefinition(pass *analysis.Pass, fun ast.Expr, c
 func (p *Analyzer) logLinterError(pass *analysis.Pass, errPos token.Pos, callPos token.Pos, err error) {
 	errPosition := pass.Fset.Position(errPos)
 	message := fmt.Sprintf("missing %s()", Pattern)
-	p.logger.Warnf("%s uri=%s details=%s", message, utils.URI(errPosition.Filename, errPosition.Line), err.Error())
+	p.logger.Printf("%s uri=%s details=%s", message, utils.URI(errPosition.Filename, errPosition.Line), err.Error())
 
 	if callPos == errPos {
 		pass.Reportf(errPos, "missing defer call to %s: %s", Pattern, err.Error())
@@ -333,7 +332,7 @@ func (p *Analyzer) checkInterfaceMethodCall(pass *analysis.Pass, methodName stri
 		}
 	}
 
-	p.logger.Infof("all interface implementations verified interface=%s method=%s implementations=%d", interfaceType.String(), methodName, len(implementations))
+	p.logger.Printf("all interface implementations verified interface=%s method=%s implementations=%d", interfaceType.String(), methodName, len(implementations))
 
 	return nil
 }
@@ -410,7 +409,7 @@ func (p *Analyzer) findAllFunctionLiteralAssignments(pass *analysis.Pass, varObj
 func (p *Analyzer) checkExternalFunc(pass *analysis.Pass, fn *types.Func) error {
 	body, err := p.findFuncBodyInObjectPackage(fn)
 	if err != nil {
-		p.logger.Infof("cannot load external function body function=%s pkg=%s reason=%s", fn.FullName(), fn.Pkg().Path(), err.Error())
+		p.logger.Printf("cannot load external function body function=%s pkg=%s reason=%s", fn.FullName(), fn.Pkg().Path(), err.Error())
 		// Avoid false positive when we cannot resolve external bodies
 		return nil
 	}
