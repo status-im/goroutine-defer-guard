@@ -79,7 +79,7 @@ func (p *Analyzer) Run(pass *analysis.Pass) (interface{}, error) {
 func (p *Analyzer) ProcessNode(pass *analysis.Pass, n ast.Node) {
 	goStmt, ok := n.(*ast.GoStmt)
 	if !ok {
-		panic("unexpected node type")
+		return
 	}
 
 	// Skip if we've already processed this goroutine statement
