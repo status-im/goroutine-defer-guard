@@ -35,6 +35,62 @@ goroutine-defer-guard -target=github.com/your/module/common.HandlePanic ./...
 goroutine-defer-guard -target=github.com/yourorg/observability/panicutil.ReportToSentry ./...
 ```
 
+## Use as `golangci-lint` plugin
+
+You can bundle this linter into a custom `golangci-lint` binary using the module plugin system.
+
+Follow https://golangci-lint.run/docs/plugins/module-plugins/ to set up the plugin system.
+
+1. Declare the plugin module in `.custom-gcl.yml` (adjust the version as needed):
+    ```yaml
+    version: v2.0.0
+
+    plugins:
+      - module: github.com/status-im/goroutine-defer-guard
+        import: github.com/status-im/goroutine-defer-guard/pkg/plugin
+        version: v0.3.0
+    ```
+
+2. Build the custom binary:
+    ```bash
+    golangci-lint custom
+    ```
+
+3. Enable the plugin in `.golangci.yml`:
+    ```yaml
+    version: "2"
+
+    linters:
+      enable:
+        - goroutine-defer-guard
+      settings:
+        custom:
+          goroutine-defer-guard:
+            type: "module"
+            description: ensure goroutines defer panic handler
+            settings:
+              target: github.com/yourorg/observability/utils.HandlePanic
+    ```
+   
+4. Run the custom `golangci-lint` binary:
+    ```bash
+    ./golangci-lint run ./...
+    ```
+
+The `target` setting mirrors the CLI flag and defaults to `HandlePanic` when omitted.
+
+## Use as `go tool`
+
+You can use it as a `go tool` in your project:
+
+```bash
+# Fetch into tool cache:
+go get -tool github.com/status-im/goroutine-defer-guard@latest
+
+# Run with go tool (flags match the CLI):
+go tool goroutine-defer-guard -target=github.com/yourorg/observability/panicutil.HandlePanic ./...
+```
+
 ## Examples
 
 ### ✅ Good - Anonymous goroutine with defer
